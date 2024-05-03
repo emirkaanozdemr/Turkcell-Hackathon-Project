@@ -265,17 +265,17 @@ if choice=="Duyguya Göre(Ses Kaydı)":
        if audio_frames:
           audio_np = np.concatenate([frame.to_ndarray() for frame in audio_frames])
           features = get_features(audio_np)
-          features=features.reshape(features.shape[0] , features.shape[1] , 1)
-          prediction=voice_model.predict(features)   
-          class_names=["Angry","Disgust","Fear","Happy","Sad","Surprise","Neutral"]
-          emotion=class_names[np.argmax(prediction)]
-          st.write(emotion)
-          emotions_df=music_df[music_df["emotion"]==emotion]
-          reccomends=emotions_df["Title"].sample(5)
-          st.write(reccomends)
-          cursor.execute("INSERT INTO emotions (emotion) VALUES (?)", (emotion,))
-          conn.commit()
-          conn.close()
+       features=features.reshape(features.shape[0] , features.shape[1] , 1)
+       prediction=voice_model.predict(features)   
+       class_names=["Angry","Disgust","Fear","Happy","Sad","Surprise","Neutral"]
+       emotion=class_names[np.argmax(prediction)]
+       st.write(emotion)
+       emotions_df=music_df[music_df["emotion"]==emotion]
+       reccomends=emotions_df["Title"].sample(5)
+       st.write(reccomends)
+       cursor.execute("INSERT INTO emotions (emotion) VALUES (?)", (emotion,))
+       conn.commit()
+       conn.close()
 
 
 
