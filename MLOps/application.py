@@ -14,6 +14,15 @@ import base64
 import warnings
 warnings.filterwarnings("ignore")
 import librosa
+import librosa.display
+import matplotlib.pyplot as plt
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
+import av
+
+
+
+
+
 
 with st.sidebar:
     st.title("Music Recommender")
@@ -190,27 +199,83 @@ if choice=="Yeni şarkı önerin":
 
 
 if choice=="Duyguya Göre(Ses Kaydı)":
+    def noise(data):
+        noise_amp = 0.035*np.random.uniform()*np.amax(data)
+        data = data + noise_amp*np.random.normal(size=data.shape[0])
+        return data
+    def stretch(data, rate=0.8):
+        return librosa.effects.time_stretch(data, rate)
+    def shift(data):
+        shift_range = int(np.random.uniform(low=-5, high = 5)*1000)
+        return np.roll(data, shift_range)
+    def pitch(data, sampling_rate, pitch_factor=0.7):
+        return librosa.effects.pitch_shift(data, sampling_rate, pitch_factor)
+    def zcr(data,frame_length,hop_length):
+        zcr=librosa.feature.zero_crossing_rate(data,frame_length=frame_length,hop_length=hop_length)
+        return np.squeeze(zcr)
+    def rmse(data,frame_length=2048,hop_length=512):
+        rmse=librosa.feature.rms(data,frame_length=frame_length,hop_length=hop_length)
+        return np.squeeze(rmse)
+    def mfcc(data,sr,frame_length=2048,hop_length=512,flatten:bool=True):
+        mfcc=librosa.feature.mfcc(data,sr=sr)
+        return np.squeeze(mfcc.T)if not flatten else np.ravel(mfcc.T)
+
+    def extract_features(data,sr=22050,frame_length=2048,hop_length=512):
+        result=np.array([])
+    
+        result=np.hstack((result,
+                      zcr(data,frame_length,hop_length),
+                      rmse(data,frame_length,hop_length),
+                      mfcc(data,sr,frame_length,hop_length)
+                     ))
+        return result
+
+    def get_features(path,duration=2.5, offset=0.6):
+        data,sr=librosa.load(path,duration=duration,offset=offset)
+        aud=extract_features(data)
+        audio=np.array(aud)
+    
+        noised_audio=noise(data)
+        aud2=extract_features(noised_audio)
+        audio=np.vstack((audio,aud2))
+    
+        pitched_audio=pitch(data,sr)
+        aud3=extract_features(pitched_audio)
+        audio=np.vstack((audio,aud3))
+    
+        pitched_audio1=pitch(data,sr)
+        pitched_noised_audio=noise(pitched_audio1)
+        aud4=extract_features(pitched_noised_audio)
+        audio=np.vstack((audio,aud4))
+    
+        return audio
     voice_model=load_model("voice_model.h5")
     st.title("Ses Dosyası Yükleyin")
-    uploaded_file = st.file_uploader("Bir ses dosyası yükleyin", type=["wav", "mp3"])
-    if uploaded_file is not None:
-       audio_data, sample_rate = librosa.load(uploaded_file, sr=None)
-       st.audio(uploaded_file)
-    else:
-       st.write("Lütfen bir ses dosyası yükleyin.")
-    if uploaded_file is not None:
-       mel_spectrogram = librosa.feature.melspectrogram(y=audio_data, sr=sample_rate)
-       mel_spectrogram = np.expand_dims(mel_spectrogram, axis=0)  
-       prediction=voice_model.predict(mel_spectrogram) 
-       class_names=["Angry","Disgust","Fear","Happy","Sad","Surprise","Neutral"]
-       emotion=class_names[np.argmax(prediction)]
-       st.write(emotion)
-       emotions_df=music_df[music_df["emotion"]==emotion]
-       reccomends=emotions_df["Title"].sample(5)
-       st.write(reccomends)
-       cursor.execute("INSERT INTO emotions (emotion) VALUES (?)", (emotion,))
-       conn.commit()
-       conn.close()
+    class AudioRecorder(AudioProcessorBase):
+        def recv_audio(self, frames: av.AudioFrame) -> av.AudioFrame:
+            return frames
+    st.write("Ses kaydı almak için aşağıdaki butonu kullanın:")
+    webrtc_ctx = webrtc_streamer(
+    key="audio_recorder",
+    mode=WebRtcMode.SENDRECV,
+    audio_processor_factory=AudioRecorder, 
+    media_stream_constraints={"audio": True, "video": False},)
+    if webrtc_ctx.audio_receiver:
+       audio_frames = list(webrtc_ctx.audio_receiver.get_frames())
+       if audio_frames:
+          audio_np = np.concatenate([frame.to_ndarray() for frame in audio_frames])
+          features = get_features(audio_np)
+          features=features.reshape(features.shape[0] , features.shape[1] , 1)
+          prediction=voice_model.predict(features)   
+          class_names=["Angry","Disgust","Fear","Happy","Sad","Surprise","Neutral"]
+          emotion=class_names[np.argmax(prediction)]
+          st.write(emotion)
+          emotions_df=music_df[music_df["emotion"]==emotion]
+          reccomends=emotions_df["Title"].sample(5)
+          st.write(reccomends)
+          cursor.execute("INSERT INTO emotions (emotion) VALUES (?)", (emotion,))
+          conn.commit()
+          conn.close()
 
 
 
@@ -222,7 +287,13 @@ if choice=="Duyguya Göre(Ses Kaydı)":
 
     conn = sqlite3.connect("database.db")
     cursor = conn.cursor()
-    one_week_ago = datetime.datetime.now() - datetime.timedelta(days=7)
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS emotions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    emotion TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)
+    ''')
+    one_week_ago = datetime.datetime.now() - datetime.timedelta(weeks=1)
     query = '''
 SELECT emotion, COUNT(*) AS count
 FROM emotions
